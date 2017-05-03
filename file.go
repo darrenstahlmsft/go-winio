@@ -138,49 +138,49 @@ func (f *win32File) asyncIo(c *ioOperation, deadline time.Time, bytes uint32, er
 	if err != syscall.ERROR_IO_PENDING {
 		f.wg.Done()
 		return int(bytes), err
-	} else {
-		var r ioResult
-		wait := true
-		timedout := false
-		if f.closing {
-			cancelIoEx(f.handle, &c.o)
-		} else if !deadline.IsZero() {
-			now := time.Now()
-			if !deadline.After(now) {
-				timedout = true
-			} else {
-				timeout := time.After(deadline.Sub(now))
-				select {
-				case r = <-c.ch:
-					wait = false
-				case <-timeout:
-					timedout = true
-				}
-			}
-		}
-		if timedout {
-			cancelIoEx(f.handle, &c.o)
-		}
-		if wait {
-			r = <-c.ch
-		}
-
-		// runtime.KeepAlive is needed, as c is passed via native
-		// code to ioCompletionProcessor, c must remain alive
-		// until the channel read is complete.
-		runtime.KeepAlive(c)
-
-		err = r.err
-		if err == syscall.ERROR_OPERATION_ABORTED {
-			if f.closing {
-				err = ErrFileClosed
-			} else if timedout {
-				err = ErrTimeout
-			}
-		}
-		f.wg.Done()
-		return int(r.bytes), err
 	}
+
+	var r ioResult
+	wait := true
+	timedout := false
+	if f.closing {
+		cancelIoEx(f.handle, &c.o)
+	} else if !deadline.IsZero() {
+		now := time.Now()
+		if !deadline.After(now) {
+			timedout = true
+		} else {
+			timeout := time.After(deadline.Sub(now))
+			select {
+			case r = <-c.ch:
+				wait = false
+			case <-timeout:
+				timedout = true
+			}
+		}
+	}
+	if timedout {
+		cancelIoEx(f.handle, &c.o)
+	}
+	if wait {
+		r = <-c.ch
+	}
+
+	// runtime.KeepAlive is needed, as c is passed via native
+	// code to ioCompletionProcessor, c must remain alive
+	// until the channel read is complete.
+	runtime.KeepAlive(c)
+
+	err = r.err
+	if err == syscall.ERROR_OPERATION_ABORTED {
+		if f.closing {
+			err = ErrFileClosed
+		} else if timedout {
+			err = ErrTimeout
+		}
+	}
+	f.wg.Done()
+	return int(r.bytes), err
 }
 
 // Read reads from a file handle.
