@@ -23,6 +23,17 @@ type atomicBool int32
 func (b *atomicBool) isSet() bool { return atomic.LoadInt32((*int32)(b)) != 0 }
 func (b *atomicBool) setFalse()   { atomic.StoreInt32((*int32)(b), 0) }
 func (b *atomicBool) setTrue()    { atomic.StoreInt32((*int32)(b), 1) }
+func (b *atomicBool) compareAndSwap(old bool, new bool) (swapped bool) {
+	var oldInt int32
+	if old == true {
+		oldInt = 1
+	}
+	var newInt int32
+	if new == true {
+		newInt = 1
+	}
+	return atomic.CompareAndSwapInt32((*int32)(b), oldInt, newInt)
+}
 
 const (
 	cFILE_SKIP_COMPLETION_PORT_ON_SUCCESS = 1
@@ -71,7 +82,7 @@ func initIo() {
 type win32File struct {
 	handle        syscall.Handle
 	wg            sync.WaitGroup
-	closing       bool
+	closing       atomicBool
 	readDeadline  deadlineHandler
 	writeDeadline deadlineHandler
 }
@@ -107,9 +118,8 @@ func MakeOpenFile(h syscall.Handle) (io.ReadWriteCloser, error) {
 
 // closeHandle closes the resources associated with a Win32 handle
 func (f *win32File) closeHandle() {
-	if !f.closing {
+	if f.closing.compareAndSwap(false, true) {
 		// cancel all IO and wait for it to complete
-		f.closing = true
 		cancelIoEx(f.handle, nil)
 		f.wg.Wait()
 		// at this point, no new IO can start
@@ -128,7 +138,7 @@ func (f *win32File) Close() error {
 // The caller must call f.wg.Done() when the IO is finished, prior to Close() returning.
 func (f *win32File) prepareIo() (*ioOperation, error) {
 	f.wg.Add(1)
-	if f.closing {
+	if f.closing.isSet() {
 		return nil, ErrFileClosed
 	}
 	c := &ioOperation{}
@@ -159,7 +169,7 @@ func (f *win32File) asyncIo(c *ioOperation, d *deadlineHandler, bytes uint32, er
 		return int(bytes), err
 	}
 
-	if f.closing {
+	if f.closing.isSet() {
 		cancelIoEx(f.handle, &c.o)
 	}
 
@@ -175,7 +185,7 @@ func (f *win32File) asyncIo(c *ioOperation, d *deadlineHandler, bytes uint32, er
 	case r = <-c.ch:
 		err = r.err
 		if err == syscall.ERROR_OPERATION_ABORTED {
-			if f.closing {
+			if f.closing.isSet() {
 				err = ErrFileClosed
 			}
 		}
